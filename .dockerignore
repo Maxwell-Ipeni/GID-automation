@@ -1,0 +1,33 @@
+# Git
+.git
+.gitignore
+
+# Python
+backend/venv/
+backend/__pycache__/
+backend/*.pyc
+
+# Node
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Generated images
+backend/generated_images/
+
+# Environment files
+backend/.env
+frontend/.env.local
+**/.env
+**/.env.local
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-data/

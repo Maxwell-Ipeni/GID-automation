@@ -65,13 +65,21 @@ npm install --silent
 echo -e "${GREEN}OK Frontend dependencies installed${NC}"
 cd ..
 
-# Environment file
-echo -e "${YELLOW}Setting up environment variables...${NC}"
+# Backend environment file
+echo -e "${YELLOW}Setting up backend environment variables...${NC}"
 if [ ! -f "backend/.env" ]; then
     cp backend/.env.example backend/.env
     echo -e "${YELLOW}INFO backend/.env created from .env.example - update with your credentials${NC}"
 else
     echo -e "${GREEN}OK backend/.env exists${NC}"
+fi
+
+# Frontend environment file
+if [ ! -f "frontend/.env.local" ]; then
+    cp frontend/.env.example frontend/.env.local
+    echo -e "${YELLOW}INFO frontend/.env.local created from .env.example${NC}"
+else
+    echo -e "${GREEN}OK frontend/.env.local exists${NC}"
 fi
 
 echo ""
@@ -87,10 +95,10 @@ echo "  Terminal 2 - Frontend:"
 echo "    cd frontend && npm run dev"
 echo ""
 echo "  Terminal 3 - Convex (if using Convex DB):"
-echo "    cd convex && npx convex dev"
+echo "    npx convex dev"
 echo ""
 echo "Or use Docker:"
-echo "    docker-compose up"
+echo "    docker compose up"
 echo ""
 echo "After setup:"
 echo "  1. Update backend/.env with your Amazon affiliate tag"
