@@ -38,8 +38,10 @@ export default defineSchema({
     productId: v.id("products"),
     asin: v.string(),
     imageUrl: v.string(),
+    generatedImageUrl: v.optional(v.string()),
     pinTitle: v.string(),
     pinDescription: v.string(),
+    hashtags: v.optional(v.array(v.string())),
     affiliateUrl: v.string(),
     status: v.union(
       v.literal("queued"),
@@ -51,10 +53,13 @@ export default defineSchema({
     publishedAt: v.optional(v.number()),
     pinId: v.optional(v.string()),
     errorMessage: v.optional(v.string()),
+    boardId: v.optional(v.string()),
+    boardName: v.optional(v.string()),
   })
     .index("by_status", ["status"])
     .index("by_product", ["productId"])
-    .index("by_scheduled", ["scheduledAt"]),
+    .index("by_scheduled", ["scheduledAt"])
+    .index("by_board", ["boardId"]),
 
   scrapingLogs: defineTable({
     source: v.string(),
@@ -71,6 +76,14 @@ export default defineSchema({
     .index("by_source", ["source"])
     .index("by_status", ["status"])
     .index("by_started", ["startedAt"]),
+
+  pinterestBoards: defineTable({
+    name: v.string(),
+    description: v.optional(v.string()),
+    pinterestId: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_name", ["name"]),
 
   settings: defineTable({
     key: v.string(),

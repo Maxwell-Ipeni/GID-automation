@@ -13,6 +13,7 @@ interface ProductCardProps {
   trendScore?: number;
   onPublish?: () => void;
   affiliateUrl?: string;
+  disabled?: boolean;
 }
 
 export default function ProductCard({
@@ -26,6 +27,7 @@ export default function ProductCard({
   trendScore,
   onPublish,
   affiliateUrl,
+  disabled,
 }: ProductCardProps) {
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition-shadow">
@@ -80,9 +82,14 @@ export default function ProductCard({
           {onPublish && (
             <button
               onClick={onPublish}
-              className="flex-1 bg-pinterest-red text-white text-sm font-medium py-2 px-3 rounded-lg hover:bg-red-700 transition-colors"
+              disabled={disabled}
+              className={`flex-1 text-white text-sm font-medium py-2 px-3 rounded-lg transition-colors ${
+                disabled
+                  ? 'bg-gray-300 cursor-not-allowed'
+                  : 'bg-pinterest-red hover:bg-red-700'
+              }`}
             >
-              📌 Pin to Pinterest
+              {disabled ? '⏳ Generating...' : '📌 Pin to Pinterest'}
             </button>
           )}
           {affiliateUrl && (

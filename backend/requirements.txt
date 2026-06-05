@@ -13,10 +13,10 @@ playwright==1.41.0
 selenium==4.17.0
 
 # Database
-convex==0.4.0
+convex>=0.4.0
 
-# Image Processing
-pillow==10.1.0
+# AI / LLM
+openai>=1.0.0
 
 # Task Queue & Scheduling
 apscheduler==3.10.4

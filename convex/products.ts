@@ -53,6 +53,7 @@ export const upsert = mutation({
     trendScore: v.optional(v.number()),
     imageUrl: v.optional(v.string()),
     productUrl: v.string(),
+    affiliateUrl: v.optional(v.string()),
     source: v.string(),
   },
   handler: async (ctx, args) => {
@@ -62,7 +63,7 @@ export const upsert = mutation({
       .first();
 
     if (existing) {
-      await ctx.db.patch(existing._id, {
+      const patch: Record<string, any> = {
         title: args.title,
         category: args.category,
         currentPrice: args.price,
@@ -72,10 +73,12 @@ export const upsert = mutation({
         trendScore: args.trendScore,
         imageUrl: args.imageUrl,
         source: args.source,
-      });
+      };
+      if (args.affiliateUrl !== undefined) patch.affiliateUrl = args.affiliateUrl;
+      await ctx.db.patch(existing._id, patch);
       return existing._id;
     } else {
-      return await ctx.db.insert("products", {
+      const insert: Record<string, any> = {
         asin: args.asin,
         title: args.title,
         category: args.category,
@@ -87,7 +90,9 @@ export const upsert = mutation({
         imageUrl: args.imageUrl,
         productUrl: args.productUrl,
         source: args.source,
-      });
+      };
+      if (args.affiliateUrl !== undefined) insert.affiliateUrl = args.affiliateUrl;
+      return await ctx.db.insert("products", insert);
     }
   },
 });

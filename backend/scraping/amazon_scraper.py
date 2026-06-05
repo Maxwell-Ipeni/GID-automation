@@ -12,8 +12,13 @@ import random
 import re
 from dataclasses import dataclass
 from utils.config import get_settings
+from utils.convex_client import ConvexService
+from utils.state import update_state
+from affiliate.affiliate_engine import AffiliateEngine
 from playwright.async_api import async_playwright
+import logging
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 @dataclass
@@ -45,47 +50,57 @@ class AmazonScraper:
     
     async def scrape_all(self) -> List[AmazonProduct]:
         """Scrape products from all Amazon sources."""
+        update_state("scraper", "scraping", "Collecting products from Amazon sources")
         products = []
         
-        # Scrape Best Sellers
-        bestsellers = await self.scrape_bestsellers()
-        for p in bestsellers:
-            p.source = "bestsellers"
-        products.extend(bestsellers)
-        
-        await self._random_delay()
-        
-        # Scrape Movers & Shakers
-        movers = await self.scrape_movers()
-        for p in movers:
-            p.source = "movers"
-        products.extend(movers)
-        
-        await self._random_delay()
-        
-        # Scrape New Releases
-        new_releases = await self.scrape_new_releases()
-        for p in new_releases:
-            p.source = "new_releases"
-        products.extend(new_releases)
-        
-        await self._random_delay()
-        
-        # Scrape Deals
-        deals = await self.scrape_deals()
-        for p in deals:
-            p.source = "deals"
-        products.extend(deals)
-        
-        # Remove duplicates by ASIN
-        seen = {}
-        unique_products = []
-        for p in products:
-            if p.asin not in seen:
-                seen[p.asin] = p
-                unique_products.append(p)
-        
-        return unique_products
+        try:
+            # Scrape Best Sellers
+            update_state("scraper", "scraping", "Scraping Best Sellers")
+            bestsellers = await self.scrape_bestsellers()
+            for p in bestsellers:
+                p.source = "bestsellers"
+            products.extend(bestsellers)
+            
+            await self._random_delay()
+            
+            # Scrape Movers & Shakers
+            update_state("scraper", "scraping", "Scraping Movers & Shakers")
+            movers = await self.scrape_movers()
+            for p in movers:
+                p.source = "movers"
+            products.extend(movers)
+            
+            await self._random_delay()
+            
+            # Scrape New Releases
+            update_state("scraper", "scraping", "Scraping New Releases")
+            new_releases = await self.scrape_new_releases()
+            for p in new_releases:
+                p.source = "new_releases"
+            products.extend(new_releases)
+            
+            await self._random_delay()
+            
+            # Scrape Deals
+            update_state("scraper", "scraping", "Scraping Deals")
+            deals = await self.scrape_deals()
+            for p in deals:
+                p.source = "deals"
+            products.extend(deals)
+            
+            # Remove duplicates by ASIN
+            seen = {}
+            unique_products = []
+            for p in products:
+                if p.asin not in seen:
+                    seen[p.asin] = p
+                    unique_products.append(p)
+            
+            update_state("scraper", "completed", f"Found {len(unique_products)} products")
+            return unique_products
+        except Exception as e:
+            update_state("scraper", "error", f"Scraping failed: {e}")
+            raise
     
     async def scrape_bestsellers(self, category: str = "") -> List[AmazonProduct]:
         """Scrape Amazon Best Sellers."""
@@ -112,23 +127,23 @@ class AmazonScraper:
         try:
             response = await self.session.get(url)
             if response.status_code != 200:
-                # Fallback to Playwright if blocked
                 return await self._scrape_with_playwright(url, source)
             
             soup = BeautifulSoup(response.text, "lxml")
-            return self._parse_product_grid(soup, source)
+            products = self._parse_product_grid(soup, source)
+            if not products:
+                products = await self._scrape_with_playwright(url, source)
+            return products
         except Exception:
-            # Fallback to Playwright on any error
             return await self._scrape_with_playwright(url, source)
     
     def _parse_product_grid(self, soup: BeautifulSoup, source: str) -> List[AmazonProduct]:
-        """Parse product grid from BeautifulSoup."""
+        """Parse product grid HTML into structured product data."""
         products = []
         
-        # Try multiple selector patterns since Amazon changes frequently
-        items = soup.find_all("div", class_=re.compile("zg-grid-general-faceout")) or \
-                soup.find_all("div", class_=re.compile("a-section a-spacing-medium")) or \
-                soup.find_all("li", class_=re.compile("zg-item-immersion"))
+        # Find all product containers by data-asin attribute (current Amazon HTML structure)
+        items = soup.find_all("div", attrs={"data-asin": True}) or \
+                soup.find_all("li", class_=re.compile("a-carousel-card"))
         
         for item in items[:20]:  # Limit to top 20
             try:
@@ -143,7 +158,6 @@ class AmazonScraper:
     def _parse_product_item(self, item, source: str) -> Optional[AmazonProduct]:
         """Parse a single product item."""
         try:
-            # Extract ASIN from data attribute or href
             asin = item.get("data-asin")
             if not asin:
                 link_elem = item.find("a", href=True)
@@ -155,23 +169,29 @@ class AmazonScraper:
                 return None
             asin = asin.strip()
             
-            # Extract title
-            title_elem = item.find("span", class_=re.compile("a-size-medium|a-size-base")) or \
-                        item.find("div", class_=re.compile("p13n-sc-truncate"))
-            title = title_elem.text.strip() if title_elem else "Unknown Product"
+            title = ""
+            title_elem = item.find("div", class_=re.compile("p13n-sc-truncate")) or \
+                        item.find("span", class_=re.compile("a-size-base|a-size-medium|a-text-normal")) or \
+                        item.find("img", alt=True)
+            if title_elem:
+                title = title_elem.get("alt", "").strip() if title_elem.name == "img" else title_elem.text.strip()
+            if not title:
+                link = item.find("a", class_=re.compile("a-link-normal"))
+                if link and link.get("title"):
+                    title = link["title"].strip()
+            if not title:
+                title = "Unknown Product"
             
-            # Extract price
-            price_elem = item.find("span", class_=re.compile("a-price")) or \
-                        item.find("span", class_=re.compile("p13n-sc-price"))
+            price_elem = item.find("span", class_=re.compile("p13n-sc-price"))
             price = None
             if price_elem:
-                price_text = price_elem.text.replace("$", "").replace(",", "")
-                try:
-                    price = float(price_text)
-                except ValueError:
-                    pass
+                price_text = re.sub(r"[^\d.]", "", price_elem.text)
+                if price_text:
+                    try:
+                        price = float(price_text)
+                    except ValueError:
+                        pass
             
-            # Extract rating
             rating_elem = item.find("span", class_=re.compile("a-icon-alt"))
             rating = None
             if rating_elem:
@@ -179,23 +199,19 @@ class AmazonScraper:
                 if rating_match:
                     rating = float(rating_match.group(1))
             
-            # Extract review count
-            review_elem = item.find("span", class_=re.compile("a-size-small")) or \
-                         item.find("a", class_=re.compile("a-link-normal.*a-text-normal"))
+            review_elem = item.find("span", class_=re.compile("a-size-small"))
             review_count = None
             if review_elem:
-                review_match = re.search(r"([\d,]+)", review_elem.text.replace(",", ""))
+                review_match = re.search(r"([\d,]+)", review_elem.text)
                 if review_match:
                     try:
-                        review_count = int(review_match.group(1))
+                        review_count = int(review_match.group(1).replace(",", ""))
                     except ValueError:
                         pass
             
-            # Extract image URL
             img_elem = item.find("img")
             image_url = img_elem.get("src") if img_elem else None
             
-            # Build product URL
             product_url = f"{settings.AMAZON_BASE_URL}/dp/{asin}"
             
             return AmazonProduct(
@@ -234,12 +250,91 @@ class AmazonScraper:
         """Random delay between requests."""
         await asyncio.sleep(random.uniform(settings.SCRAPE_DELAY_MIN, settings.SCRAPE_DELAY_MAX))
     
+    async def store_products_to_convex(self, products: List[AmazonProduct]) -> int:
+        """Store scraped products to Convex DB."""
+        if not products:
+            return 0
+        
+        update_state("scraper", "scraping", f"Storing {len(products)} products to database")
+        convex = ConvexService()
+        stored_count = 0
+        
+        aff_engine = AffiliateEngine()
+        for product in products:
+            try:
+                product_url = f"{settings.AMAZON_BASE_URL}/dp/{product.asin}"
+                affiliate_url = aff_engine.generate_affiliate_link(product.asin)
+                data = {
+                    "asin": product.asin,
+                    "title": product.title,
+                    "source": product.source or "unknown",
+                    "productUrl": product_url,
+                    "affiliateUrl": affiliate_url,
+                }
+                if product.category is not None:
+                    data["category"] = product.category
+                if product.price is not None:
+                    data["price"] = product.price
+                if product.rating is not None:
+                    data["rating"] = product.rating
+                if product.review_count is not None:
+                    data["reviewCount"] = product.review_count
+                if product.bestseller_rank is not None:
+                    data["bestsellerRank"] = product.bestseller_rank
+                if product.trend_score is not None:
+                    data["trendScore"] = product.trend_score
+                if product.image_url is not None:
+                    data["imageUrl"] = product.image_url
+                await convex.products_upsert(data)
+                stored_count += 1
+            except Exception as e:
+                logger.error(f"Failed to store product {product.asin}: {e}")
+                continue
+        
+        update_state("scraper", "completed", f"Stored {stored_count} products")
+        return stored_count
+    
     async def get_stored_products(self, source: Optional[str] = None, min_score: Optional[float] = None, limit: int = 50) -> List[AmazonProduct]:
-        """Retrieve stored products from the database."""
-        # This is a simplified version - in production, this would query Convex DB
-        return []
+        """Retrieve stored products from Convex DB."""
+        try:
+            convex = ConvexService()
+            products_data = await convex.products_list(source=source, min_score=min_score, limit=limit)
+            
+            products = []
+            for p in products_data:
+                products.append(AmazonProduct(
+                    asin=p.get("asin", ""),
+                    title=p.get("title", ""),
+                    category=p.get("category"),
+                    price=p.get("currentPrice") or p.get("price"),
+                    rating=p.get("rating"),
+                    review_count=p.get("reviewCount"),
+                    bestseller_rank=p.get("bestsellerRank"),
+                    trend_score=p.get("trendScore"),
+                    image_url=p.get("imageUrl"),
+                    product_url=p.get("productUrl", ""),
+                    source=p.get("source", ""),
+                ))
+            return products
+        except Exception as e:
+            logger.error(f"Failed to get stored products: {e}")
+            return []
     
     async def get_scraping_status(self) -> Dict:
-        """Get the status of the most recent scraping operation."""
-        # Simplified - in production, this would query the database
-        return {"status": "unknown", "last_run": None, "products_found": 0}
+        """Get the status of the most recent scraping operation from Convex."""
+        try:
+            convex = ConvexService()
+            recent_logs = await convex.scraping_logs_get_recent(limit=1)
+            
+            if recent_logs:
+                last_log = recent_logs[0]
+                return {
+                    "status": last_log.get("status", "unknown"),
+                    "last_run": last_log.get("startedAt"),
+                    "products_found": last_log.get("productsFound", 0),
+                    "source": last_log.get("source", ""),
+                }
+            return {"status": "no_runs", "last_run": None, "products_found": 0}
+        except Exception as e:
+            logger.error(f"Failed to get scraping status: {e}")
+            return {"status": "error", "last_run": None, "products_found": 0, "error": str(e)}

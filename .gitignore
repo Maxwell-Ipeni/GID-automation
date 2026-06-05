@@ -47,5 +47,8 @@ logs/
 venv
 env
 
+# Generated pin images
+backend/generated_images/
+
 # Convex
 convex/_generated/
