@@ -58,6 +58,7 @@ export default defineSchema({
   })
     .index("by_status", ["status"])
     .index("by_product", ["productId"])
+    .index("by_product_status", ["productId", "status"])
     .index("by_scheduled", ["scheduledAt"])
     .index("by_board", ["boardId"]),
 

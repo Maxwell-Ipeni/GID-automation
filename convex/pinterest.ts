@@ -52,6 +52,16 @@ export const queue = mutation({
     boardName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("pinterestPosts")
+      .withIndex("by_product", (q) => q.eq("productId", args.productId))
+      .filter((q) =>
+        q.or(q.eq(q.field("status"), "queued"), q.eq(q.field("status"), "processing")),
+      )
+      .first();
+    if (existing) {
+      return existing._id;
+    }
     return await ctx.db.insert("pinterestPosts", {
       productId: args.productId,
       asin: args.asin,
@@ -164,6 +174,24 @@ export const getStats = query({
       published: all.filter((p) => p.status === "published").length,
       failed: all.filter((p) => p.status === "failed").length,
     };
+  },
+});
+
+export const listQueuedProductIds = query({
+  handler: async (ctx) => {
+    const posts = await ctx.db
+      .query("pinterestPosts")
+      .withIndex("by_status", (q) => q.eq("status", "queued"))
+      .collect();
+    const processing = await ctx.db
+      .query("pinterestPosts")
+      .withIndex("by_status", (q) => q.eq("status", "processing"))
+      .collect();
+    const ids = new Set<string>();
+    for (const p of [...posts, ...processing]) {
+      if (p.productId) ids.add(p.productId);
+    }
+    return Array.from(ids);
   },
 });
 

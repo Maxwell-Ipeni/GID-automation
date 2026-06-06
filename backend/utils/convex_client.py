@@ -73,9 +73,9 @@ class ConvexService:
         return await asyncio.to_thread(self.client.query, "affiliate:getByProduct", {"productId": product_id})
 
     async def pinterest_list_all_product_ids(self) -> set:
-        """Get all product IDs that have been queued (across all statuses)."""
-        posts = await asyncio.to_thread(self.client.query, "pinterest:list", {"limit": 1000})
-        return {p.get("productId") for p in posts if p.get("productId")}
+        """Get all product IDs with queued or processing status (ineligible for re-queue)."""
+        ids = await asyncio.to_thread(self.client.query, "pinterest:listQueuedProductIds", {})
+        return set(ids)
 
     async def pinterest_list(self, status: Optional[str] = None, board_id: Optional[str] = None, limit: int = 50) -> List[Dict]:
         """List Pinterest posts."""

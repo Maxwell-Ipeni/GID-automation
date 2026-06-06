@@ -105,14 +105,8 @@ async def _save_schedule_state(component: str) -> None:
     try:
         ts = int(time.time())
         key = f"last_{component}_at"
-        interval = (
-            settings.SCRAPE_INTERVAL_HOURS * 3600
-            if component == "scrape"
-            else settings.PUBLISH_INTERVAL_MINUTES * 60
-        )
         await convex.settings_set(key, ts)
         _schedule_state[component]["last_run"] = ts
-        _schedule_state[component]["next_run"] = ts + interval
     except Exception as e:
         logger.warning("Failed to save %s schedule state: %s", component, e)
 
@@ -175,6 +169,7 @@ async def _run_scrape_loop():
     await asyncio.sleep(delay)
     while True:
         try:
+            _schedule_state["scrape"]["next_run"] = int(time.time() + settings.SCRAPE_INTERVAL_HOURS * 3600)
             await scheduled_scrape()
             await _save_schedule_state("scrape")
             await asyncio.sleep(settings.SCRAPE_INTERVAL_HOURS * 3600)
@@ -188,6 +183,7 @@ async def _run_publish_loop():
     await asyncio.sleep(delay)
     while True:
         try:
+            _schedule_state["publish"]["next_run"] = int(time.time() + settings.PUBLISH_INTERVAL_MINUTES * 60)
             await scheduled_publish()
             await _save_schedule_state("publish")
             await asyncio.sleep(settings.PUBLISH_INTERVAL_MINUTES * 60)
