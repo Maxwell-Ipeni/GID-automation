@@ -58,7 +58,7 @@ export default function ContentPreviewModal({
   const [creatingBoard, setCreatingBoard] = useState(false);
   const [newBoardName, setNewBoardName] = useState('');
 
-  const previewImage = imageUrl.startsWith('/') ? `http://localhost:8000${imageUrl}` : imageUrl;
+  const previewImage = imageUrl.startsWith('/') ? imageUrl : imageUrl;
   const suggestedBoard = getSuggestedBoard(product.category);
 
   useEffect(() => {

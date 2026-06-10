@@ -2,6 +2,8 @@ import logging
 import random
 import json
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 from openai import OpenAI
 from utils.config import get_settings
@@ -149,10 +151,14 @@ class PinContentAI:
         self.client = OpenAI(
             api_key=settings.NVIDIA_API_KEY,
             base_url=settings.NVIDIA_API_BASE,
+            timeout=30.0,
+            max_retries=0,
         )
         self.model = settings.NVIDIA_MODEL
         self.vision_model = settings.NVIDIA_VISION_MODEL
         self.fallback_model = settings.NVIDIA_FALLBACK_MODEL
+        self._vision_timeout = 10.0
+        self._content_timeout = 120.0
 
     def is_configured(self) -> bool:
         return bool(settings.NVIDIA_API_KEY)
@@ -164,6 +170,7 @@ class PinContentAI:
     def _analyze_image(self, image_url: str) -> Optional[dict]:
         if not image_url:
             return None
+        
         try:
             response = self.client.chat.completions.create(
                 model=self.vision_model,
@@ -181,6 +188,7 @@ class PinContentAI:
                 ],
                 temperature=0.3,
                 max_tokens=500,
+                timeout=self._vision_timeout,
             )
             raw = response.choices[0].message.content
             if not raw:
@@ -233,28 +241,39 @@ class PinContentAI:
         return "\n".join(lines)
 
     def _call_llm(self, model: str, messages: list, temperature: float = 0.8) -> Optional[dict]:
-        try:
-            response = self.client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=500,
-            )
-            raw = response.choices[0].message.content
-            if not raw:
-                raise ValueError("Empty response from LLM")
-            json_match = re.search(r'\{.*\}', raw, re.DOTALL)
-            if not json_match:
-                raise ValueError("No JSON found in response")
-            result = json.loads(json_match.group())
-            desc = result.get("description")
-            tags = result.get("hashtags")
-            if not desc or not tags:
-                raise ValueError("Missing required fields in response")
-            return {"description": desc, "hashtags": tags}
-        except Exception as e:
-            logger.warning(f"LLM call failed on {model}: {e}")
-            return None
+        max_retries = 2
+        base_delay = 1.0
+        
+        for attempt in range(max_retries + 1):
+            try:
+                response = self.client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=500,
+                    timeout=self._content_timeout,
+                )
+                raw = response.choices[0].message.content
+                if not raw:
+                    raise ValueError("Empty response from LLM")
+                json_match = re.search(r'\{.*\}', raw, re.DOTALL)
+                if not json_match:
+                    raise ValueError("No JSON found in response")
+                result = json.loads(json_match.group())
+                desc = result.get("description")
+                tags = result.get("hashtags")
+                if not desc or not tags:
+                    raise ValueError("Missing required fields in response")
+                return {"description": desc, "hashtags": tags}
+            except Exception as e:
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(f"LLM call failed on {model} (attempt {attempt + 1}/{max_retries + 1}): {e}. Retrying in {delay}s...")
+                    time.sleep(delay)
+                else:
+                    logger.warning(f"LLM call failed on {model} after {max_retries + 1} attempts: {e}")
+                    return None
+        return None
 
     def generate_content(self, product: dict) -> dict:
         title = product.get("title", "")
@@ -263,25 +282,40 @@ class PinContentAI:
             return self._fallback_content(product)
 
         image_url = product.get("image_url", "")
-        vision = self._analyze_image(image_url)
 
-        user_prompt = self._build_prompt(product, vision)
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ]
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            vision_future = executor.submit(self._analyze_image, image_url)
+            basic_prompt = self._build_prompt(product, None)
+            basic_messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": basic_prompt},
+            ]
+
+            try:
+                vision = vision_future.result(timeout=self._vision_timeout)
+            except Exception:
+                vision = None
+
+        if vision:
+            enhanced_prompt = self._build_prompt(product, vision)
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": enhanced_prompt},
+            ]
+        else:
+            messages = basic_messages
 
         result = self._call_llm(self.model, messages)
 
         if result is None:
-            logger.warning("Primary model failed, trying fallback model")
+            logger.warning("Primary model failed, trying fallback model (single attempt)")
             result = self._call_llm(self.fallback_model, messages, temperature=0.9)
 
         if result:
             desc = result.get("description", "")
             if self._contains_banned_phrases(desc):
-                logger.warning("Banned phrases detected, regenerating")
-                messages[1]["content"] = user_prompt + "\n\nIMPORTANT: Review the banned phrases list carefully and avoid every single one."
+                logger.warning("Banned phrases detected, regenerating once")
+                messages[1]["content"] += "\n\nIMPORTANT: Review the banned phrases list carefully and avoid every single one."
                 redo = self._call_llm(self.model, messages, temperature=0.9)
                 if redo:
                     result = redo

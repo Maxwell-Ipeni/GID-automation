@@ -8,6 +8,7 @@ import clsx from 'clsx';
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: '📊' },
   { name: 'Products', href: '/products', icon: '🛒' },
+  { name: 'Trends', href: '/trends', icon: '📈' },
   { name: 'Pinterest Queue', href: '/queue', icon: '📌' },
   { name: 'Settings', href: '/settings', icon: '⚙️' },
 ];
@@ -26,7 +27,7 @@ export default function Navbar() {
   useEffect(() => {
     const fetchStatus = async () => {
       try {
-        const res = await fetch('http://localhost:8000/api/system/status');
+        const res = await fetch('/api/system/status');
         if (res.ok) setStatus(await res.json());
       } catch {
         // Backend not available

@@ -74,6 +74,7 @@ cd backend && source venv/bin/activate && uvicorn main:app --reload --port 8000
 # Terminal 3 - Frontend
 cd frontend && npm run dev
 ```
+Run entire app at npm run dev   and access backend at npx convex dev
 
 ### Docker
 

@@ -60,6 +60,18 @@ class ConvexService:
         """Get trending products."""
         return await asyncio.to_thread(self.client.query, "products:getTrending", {"limit": limit})
 
+    async def products_get_source_counts(self) -> Dict:
+        """Get product count and source breakdown."""
+        return await asyncio.to_thread(self.client.query, "products:getSourceCounts", {})
+
+    async def products_list_by_title(self, title: str) -> List[Dict]:
+        """Find products by exact title match."""
+        return await asyncio.to_thread(self.client.query, "products:listByTitle", {"title": title})
+
+    async def pinterest_delete(self, post_id: str) -> None:
+        """Delete a Pinterest post by ID."""
+        await asyncio.to_thread(self.client.mutation, "pinterest:remove", {"id": post_id})
+
     async def affiliate_generate(self, product_id: str, asin: str, affiliate_tag: str) -> Dict:
         """Generate an affiliate link for a product."""
         return await asyncio.to_thread(self.client.mutation, "affiliate:generateAffiliateLink", {
@@ -137,6 +149,93 @@ class ConvexService:
     async def pinterest_get_queue_count(self) -> int:
         """Count posts with 'queued' status."""
         return await asyncio.to_thread(self.client.query, "pinterest:getQueueCount", {})
+
+    async def products_list_by_asins(self, asins: List[str]) -> List[Dict]:
+        """Batch lookup products by ASIN list."""
+        return await asyncio.to_thread(
+            self.client.query, "products:listByAsins", {"asins": asins}
+        )
+
+    async def products_get_by_sources(self, sources: List[str], limit: int = 2) -> List[Dict]:
+        """Get top products by source, ordered by trendScore."""
+        return await asyncio.to_thread(
+            self.client.query, "products:getBySources", {"sources": sources, "limit": limit}
+        )
+
+    async def pinterest_list_trending_product_ids(self) -> List[str]:
+        """Get product IDs that have been queued via trends (have trendKeyword set)."""
+        return await asyncio.to_thread(
+            self.client.query, "pinterest:listTrendingProductIds", {}
+        )
+
+    async def pinterest_get_queue_balance(self) -> Dict[str, int]:
+        """Get current queue counts by source category."""
+        return await asyncio.to_thread(
+            self.client.query, "pinterest:getQueueBalance", {}
+        )
+
+    async def pinterest_list_by_priority(
+        self, status: Optional[str] = None, limit: int = 50
+    ) -> List[Dict]:
+        """List Pinterest posts ordered by priority desc, then creation time asc."""
+        args = {"limit": limit}
+        if status:
+            args["status"] = status
+        return await asyncio.to_thread(
+            self.client.query, "pinterest:listByPriority", args
+        )
+
+    async def pinterest_trends_save(
+        self,
+        keyword: str,
+        rank: int,
+        source: str,
+        timeframe: str,
+        matchedAsins: List[str],
+        discoveredAsins: List[str],
+        productCount: int,
+        queuedCount: int,
+    ) -> str:
+        """Save or update a trend entry in Convex."""
+        return await asyncio.to_thread(self.client.mutation, "pinterest:trendsSave", {
+            "keyword": keyword,
+            "rank": rank,
+            "source": source,
+            "timeframe": timeframe,
+            "matchedAsins": matchedAsins,
+            "discoveredAsins": discoveredAsins,
+            "productCount": productCount,
+            "queuedCount": queuedCount,
+        })
+
+    async def pinterest_trends_list(
+        self,
+        source: Optional[str] = None,
+        timeframe: Optional[str] = None,
+    ) -> List[Dict]:
+        """List stored trends, optionally filtered by source and/or timeframe."""
+        args: Dict[str, Any] = {}
+        if source:
+            args["source"] = source
+        if timeframe:
+            args["timeframe"] = timeframe
+        return await asyncio.to_thread(
+            self.client.query, "pinterest:trendsList", args
+        )
+
+    async def pinterest_list_by_trend_keyword(
+        self,
+        keyword: str,
+        timeframe: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict]:
+        """List Pinterest posts filtered by trend keyword."""
+        args = {"keyword": keyword, "limit": limit}
+        if timeframe:
+            args["timeframe"] = timeframe
+        return await asyncio.to_thread(
+            self.client.query, "pinterest:listByTrendKeyword", args
+        )
 
     async def scraping_logs_start(self, source: str, startedAt: int = None) -> str:
         """Log the start of a scraping operation."""

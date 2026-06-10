@@ -15,17 +15,33 @@ export const list = query({
         .query("products")
         .withIndex("by_source", (q) => q.eq("source", args.source!))
         .collect();
+      products.sort((a, b) => (b.trendScore ?? 0) - (a.trendScore ?? 0));
+      if (args.limit) products = products.slice(0, args.limit);
     } else {
-      products = await ctx.db.query("products").collect();
+      products = await ctx.db
+        .query("products")
+        .withIndex("by_trend_score")
+        .order("desc")
+        .take(args.limit ?? 50);
     }
 
     if (args.minScore !== undefined) {
       products = products.filter((p) => (p.trendScore ?? 0) >= args.minScore!);
     }
 
-    products.sort((a, b) => (b.trendScore ?? 0) - (a.trendScore ?? 0));
+    return products;
+  },
+});
 
-    return products.slice(0, args.limit ?? 50);
+export const getSourceCounts = query({
+  handler: async (ctx) => {
+    const all = await ctx.db.query("products").collect();
+    const sources: Record<string, number> = {};
+    for (const p of all) {
+      const s = p.source ?? "unknown";
+      sources[s] = (sources[s] ?? 0) + 1;
+    }
+    return { total: all.length, sources };
   },
 });
 
@@ -101,5 +117,47 @@ export const remove = mutation({
   args: { id: v.id("products") },
   handler: async (ctx, args) => {
     await ctx.db.delete(args.id);
+  },
+});
+
+export const listByAsins = query({
+  args: { asins: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const products = [];
+    for (const asin of args.asins) {
+      const p = await ctx.db
+        .query("products")
+        .withIndex("by_asin", (q) => q.eq("asin", asin))
+        .first();
+      if (p) products.push(p);
+    }
+    return products;
+  },
+});
+
+export const listByTitle = query({
+  args: { title: v.string() },
+  handler: async (ctx, args) => {
+    const all = await ctx.db.query("products").collect();
+    return all.filter((p) => p.title === args.title);
+  },
+});
+
+export const getBySources = query({
+  args: {
+    sources: v.array(v.string()),
+    limit: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const all: any[] = [];
+    for (const source of args.sources) {
+      let products = await ctx.db
+        .query("products")
+        .withIndex("by_source", (q) => q.eq("source", source))
+        .collect();
+      products.sort((a, b) => (b.trendScore ?? 0) - (a.trendScore ?? 0));
+      all.push(...products.slice(0, args.limit));
+    }
+    return all;
   },
 });

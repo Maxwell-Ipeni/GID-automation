@@ -17,6 +17,7 @@ export default defineSchema({
     productUrl: v.string(),
     source: v.string(),
     affiliateUrl: v.optional(v.string()),
+    trendSource: v.optional(v.string()),
   })
     .index("by_asin", ["asin"])
     .index("by_trend_score", ["trendScore"])
@@ -55,12 +56,29 @@ export default defineSchema({
     errorMessage: v.optional(v.string()),
     boardId: v.optional(v.string()),
     boardName: v.optional(v.string()),
+    priority: v.optional(v.number()),
+    trendKeyword: v.optional(v.string()),
+    trendTimeframe: v.optional(v.string()),
   })
     .index("by_status", ["status"])
     .index("by_product", ["productId"])
     .index("by_product_status", ["productId", "status"])
     .index("by_scheduled", ["scheduledAt"])
     .index("by_board", ["boardId"]),
+
+  pinterestTrends: defineTable({
+    keyword: v.string(),
+    rank: v.number(),
+    source: v.union(v.literal("pinterest"), v.literal("amazon")),
+    timeframe: v.string(),
+    matchedAsins: v.array(v.string()),
+    discoveredAsins: v.array(v.string()),
+    productCount: v.number(),
+    queuedCount: v.number(),
+    processedAt: v.number(),
+  })
+    .index("by_source_timeframe", ["source", "timeframe"])
+    .index("by_rank", ["rank"]),
 
   scrapingLogs: defineTable({
     source: v.string(),

@@ -338,6 +338,7 @@ function ScheduleRow({ job }: { job: { id: string; next_run: string | null; inte
   const jobLabels: Record<string, string> = {
     scrape_job: 'Next Scrape',
     publish_job: 'Next Publish',
+    trends_job: 'Next Trends',
   };
 
   function formatTime(iso: string | null): string {

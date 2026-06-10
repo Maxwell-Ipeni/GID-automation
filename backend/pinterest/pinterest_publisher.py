@@ -8,7 +8,7 @@ import asyncio
 import logging
 import random
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from utils.config import get_settings
 from utils.convex_client import ConvexService
 from utils.state import update_state
@@ -54,6 +54,9 @@ class PinterestPublisher:
         scheduled_at: Optional[int] = None,
         board_id: Optional[str] = None,
         board_name: Optional[str] = None,
+        priority: Optional[int] = None,
+        trend_keyword: Optional[str] = None,
+        trend_timeframe: Optional[str] = None,
     ) -> str:
         """
         Queue a Pinterest post in Convex.
@@ -78,6 +81,12 @@ class PinterestPublisher:
                 post_data["boardId"] = board_id
             if board_name:
                 post_data["boardName"] = board_name
+            if priority is not None:
+                post_data["priority"] = priority
+            if trend_keyword:
+                post_data["trendKeyword"] = trend_keyword
+            if trend_timeframe:
+                post_data["trendTimeframe"] = trend_timeframe
             
             post_id = await self.convex.pinterest_queue(post_data)
             logger.info(f"Queued Pinterest post: {post_id}")
@@ -159,7 +168,7 @@ class PinterestPublisher:
         """
         update_state("publisher", "publishing", f"Processing up to {limit} queued posts")
         try:
-            queued_posts = await self.convex.pinterest_list(status="queued", limit=limit)
+            queued_posts = await self.convex.pinterest_list_by_priority(status="queued", limit=limit * 3)
             
             if not queued_posts:
                 update_state("publisher", "idle", "No queued posts")
@@ -178,27 +187,24 @@ class PinterestPublisher:
             published_count = 0
             failed_count = 0
             errors = []
-            
-            for post in queued_posts:
+            posts_to_process = queued_posts[:]
+            processed_ids: set = set()
+
+            while posts_to_process and (published_count + failed_count) < limit:
+                post = posts_to_process.pop(0)
                 post_id = post.get("_id")
-                if not post_id:
+                if not post_id or post_id in processed_ids:
                     continue
+                processed_ids.add(post_id)
                 
                 try:
-                    # Lock as processing to prevent scheduler from picking it up again
                     await self.convex.pinterest_mark_processing(post_id)
-
-                    # Resolve board for this post (auto-create if needed)
                     board_id = await self._resolve_board_for_post(post)
                     if not board_id:
                         raise ValueError("Could not resolve board for post")
 
                     scheduled_at = self._calculate_schedule_time()
-                    
-                    # Try to publish
                     pin_data = await self._real_publish_with_retry(post, scheduled_at, board_id)
-                    
-                    # Success - mark as published with retry
                     await self._safe_mark_published(post_id, pin_data.get("id", "unknown"))
                     published_count += 1
                     logger.info(f"Successfully published post {post_id} as pin {pin_data.get('id')} on board {board_id}")
@@ -207,7 +213,6 @@ class PinterestPublisher:
                     pinterest_error = str(e)
                     logger.error(f"Failed to publish post {post_id} after retries: {pinterest_error}")
 
-                    # Try Buffer as fallback publisher
                     buffer_result = await self._publish_via_buffer(post)
                     if buffer_result:
                         await self._safe_mark_published(post_id, f"buffer_{buffer_result}")
@@ -218,6 +223,15 @@ class PinterestPublisher:
                     await self.mark_failed(post_id, f"Pinterest failed, Buffer also failed. Pinterest error: {pinterest_error}")
                     errors.append({"post_id": post_id, "error": pinterest_error})
                     failed_count += 1
+
+                    # Fill-on-failure: grab another queued post to maintain publish target
+                    target_remaining = limit - (published_count + failed_count)
+                    if target_remaining > 0:
+                        extra_posts = await self.convex.pinterest_list(status="queued", limit=target_remaining)
+                        for extra in extra_posts:
+                            extra_id = extra.get("_id")
+                            if extra_id and extra_id not in processed_ids and extra not in posts_to_process:
+                                posts_to_process.append(extra)
             
             update_state("publisher", "completed", f"Published {published_count}, failed {failed_count}")
             return {
@@ -230,6 +244,43 @@ class PinterestPublisher:
             logger.error(f"Error in publish_queued_posts: {e}")
             update_state("publisher", "error", str(e))
             return {"published": 0, "failed": 0, "error": str(e)}
+
+    async def publish_one(self, post_id: str) -> Dict:
+        """Publish a single queued post by ID. Returns dict with 'published' or 'failed' key."""
+        try:
+            post = await self.convex.pinterest_list(status="queued", limit=100)
+            post = next((p for p in post if p.get("_id") == post_id), None)
+            if not post:
+                return {"failed": True, "error": f"Post {post_id} not found in queue"}
+
+            if not self.is_configured():
+                if self.is_buffer_configured():
+                    await self.convex.pinterest_mark_processing(post_id)
+                    results = await self._post_to_buffer_channels(post)
+                    any_success = "pinterest" in results or "twitter" in results
+                    if not any_success:
+                        raise Exception("Buffer publish failed")
+                    await self._safe_mark_published(post_id, f"buffer_{results.get('pinterest', results.get('twitter', 'unknown'))}")
+                    return {"published": True, "post_id": post_id}
+                return {"failed": True, "error": "Pinterest not configured"}
+
+            api = self.get_api_client()
+            await self.convex.pinterest_mark_processing(post_id)
+            board_id = await self._resolve_board_for_post(post)
+            if not board_id:
+                raise ValueError("Could not resolve board")
+            scheduled_at = self._calculate_schedule_time()
+            pin_data = await self._real_publish_with_retry(post, scheduled_at, board_id)
+            await self._safe_mark_published(post_id, pin_data.get("id", "unknown"))
+            return {"published": True, "post_id": post_id, "pin_id": pin_data.get("id")}
+        except Exception as e:
+            logger.error(f"Manual publish failed for {post_id}: {e}")
+            buffer_result = await self._publish_via_buffer(post) if 'post' in dir() else None
+            if buffer_result:
+                await self._safe_mark_published(post_id, f"buffer_{buffer_result}")
+                return {"published": True, "post_id": post_id}
+            await self.mark_failed(post_id, str(e))
+            return {"failed": True, "error": str(e)}
     
     async def _real_publish_with_retry(
         self,
@@ -578,24 +629,86 @@ class PinterestPublisher:
                 return {"id": board_id, "name": name}
         return None
 
-    async def auto_queue_products(self, limit: int = 5) -> Dict:
-        """Auto-queue top trending products that haven't been queued yet.
+    async def auto_queue_products(self, limit: int = 11) -> Dict:
+        """Auto-queue products using round-robin balancing: 3 trending + 2 per source.
 
-        Generates AI content and designer pin image for each, then queues.
-        Processes products concurrently for speed.
-        Returns count of queued products.
+        Bucket quotas:
+          - trending: 3 (products with trendKeyword, from Pinterest/Amazon trends)
+          - bestsellers: 2
+          - new_releases: 2
+          - movers: 2
+          - deals: 2
+
+        Within each bucket, region weighting applies: US 50%, others 50%.
+        Products are interleaved in round-robin order for a balanced queue.
         """
         from ai.pin_writer import PinContentAI
         from images.image_generator import PinImageGenerator
         from images.pin_templates import get_board_name_for_category
 
+        QUOTAS = {
+            "trending": 3,
+            "bestsellers": 2,
+            "new_releases": 2,
+            "movers": 2,
+            "deals": 2,
+        }
+
+        SOURCES = ["bestsellers", "new_releases", "movers", "deals"]
+
         try:
             queued_ids = await self.convex.pinterest_list_all_product_ids()
-            trending = await self.convex.products_get_trending(limit=50)
+            trending_ids = set(await self.convex.pinterest_list_trending_product_ids())
 
-            new_products = [p for p in trending if p.get("_id") and p.get("_id") not in queued_ids][:limit]
+            trending_products = await self.convex.products_get_trending(limit=50)
+            trending_products = [
+                p for p in trending_products
+                if p.get("_id") and p.get("_id") not in queued_ids and p.get("_id") in trending_ids
+            ]
 
-            if not new_products:
+            by_source: Dict[str, List[Dict]] = {}
+            for src in SOURCES:
+                products = await self.convex.products_list(source=src, limit=50)
+                products = [
+                    p for p in products
+                    if p.get("_id") and p.get("_id") not in queued_ids and p.get("_id") not in trending_ids
+                ]
+                by_source[src] = products
+
+            def apply_region_weighting(products: List[Dict], quota: int) -> List[Dict]:
+                if not products:
+                    return []
+                us_products = [p for p in products if self._is_us_region(p)]
+                other_products = [p for p in products if not self._is_us_region(p)]
+                target_us = max(1, round(quota * 0.5))
+                selected = us_products[:target_us] + other_products[:quota - target_us]
+                if len(selected) < quota and len(us_products) < target_us:
+                    needed = quota - len(selected)
+                    selected.extend(other_products[target_us:target_us + needed])
+                return selected[:quota]
+
+            trending_selected = apply_region_weighting(trending_products, QUOTAS["trending"])
+
+            source_selected: Dict[str, List[Dict]] = {}
+            for src in SOURCES:
+                source_selected[src] = apply_region_weighting(by_source[src], QUOTAS[src])
+
+            selected_products: List[Dict] = []
+            remaining: Dict[str, List[Dict]] = {
+                "trending": trending_selected,
+                **{src: source_selected[src] for src in SOURCES},
+            }
+
+            for _ in range(QUOTAS["trending"]):
+                if remaining["trending"]:
+                    selected_products.append(remaining["trending"].pop(0))
+
+            for src in SOURCES:
+                for _ in range(QUOTAS[src]):
+                    if remaining[src]:
+                        selected_products.append(remaining[src].pop(0))
+
+            if not selected_products:
                 logger.info("No new products to auto-queue")
                 return {"queued": 0, "message": "No new products"}
 
@@ -620,7 +733,8 @@ class PinterestPublisher:
                     affiliate_url = product.get("affiliateUrl") or f"https://www.amazon.com/dp/{product.get('asin')}?tag={settings.AMAZON_AFFILIATE_TAG}"
                     board_name = get_board_name_for_category(product.get("category"))
 
-                    post_id = await self.convex.pinterest_queue({
+                    is_trending = product.get("_id") in trending_ids
+                    post_data: Dict[str, Any] = {
                         "productId": product["_id"],
                         "asin": product.get("asin", ""),
                         "imageUrl": product.get("imageUrl", ""),
@@ -630,7 +744,13 @@ class PinterestPublisher:
                         "hashtags": content.get("hashtags", []),
                         "affiliateUrl": affiliate_url,
                         "boardName": board_name,
-                    })
+                        "priority": 1,
+                    }
+                    if is_trending:
+                        post_data["trendKeyword"] = product.get("trendKeyword", "trending")
+                        post_data["trendTimeframe"] = product.get("trendTimeframe", "daily")
+
+                    post_id = await self.convex.pinterest_queue(post_data)
                     logger.info(f"Auto-queued product {product.get('asin')} → post {post_id} (board: {board_name})")
                     return post_id
                 except Exception as e:
@@ -638,11 +758,21 @@ class PinterestPublisher:
                     errors.append({"asin": product.get("asin"), "error": str(e)})
                     return None
 
-            results = await asyncio.gather(*[_process_one(p) for p in new_products])
+            results = await asyncio.gather(*[_process_one(p) for p in selected_products])
             queued_count = sum(1 for r in results if r is not None)
 
-            logger.info(f"Auto-queued {queued_count}/{len(new_products)} products")
-            return {"queued": queued_count, "total": len(new_products), "errors": errors if errors else None}
+            logger.info(f"Auto-queued {queued_count}/{len(selected_products)} products")
+            return {"queued": queued_count, "total": len(selected_products), "errors": errors if errors else None}
         except Exception as e:
             logger.error(f"auto_queue_products failed: {e}")
             return {"queued": 0, "total": 0, "error": str(e)}
+
+    def _is_us_region(self, product: Dict) -> bool:
+        """Check if product is likely from US region based on affiliate URL or domain."""
+        url = product.get("affiliateUrl", "") or product.get("productUrl", "") or ""
+        amazon_domains = ["amazon.com", "amazon.co.uk", "amazon.de", "amazon.fr", "amazon.it", "amazon.es"]
+        for domain in amazon_domains:
+            if domain in url:
+                return domain == "amazon.com"
+        category = product.get("category", "")
+        return True

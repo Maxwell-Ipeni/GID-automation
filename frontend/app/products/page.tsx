@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import ProductCard from '@/components/ProductCard';
 import ContentPreviewModal from '@/components/ContentPreviewModal';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { getProducts, getAffiliateLink, queuePinterestPost, triggerScrape, generatePinContent, generatePinImage } from '@/lib/api';
 import type { Product, AiContent } from '@/lib/api';
 
@@ -156,13 +157,14 @@ export default function ProductsPage() {
             <ProductCard
               key={product.asin}
               asin={product.asin}
-              title={product.title || 'Unknown Product'}
+              title={product.title && product.title !== 'Unknown Product' ? product.title : `ASIN ${product.asin}`}
               price={product.price}
               rating={product.rating}
               reviewCount={product.review_count}
               imageUrl={product.image_url}
               source={product.source}
               trendScore={product.trend_score}
+              affiliateUrl={product.affiliate_url}
               onPublish={() => handlePublish(product)}
               disabled={queueing === product.asin}
             />
@@ -181,18 +183,42 @@ export default function ProductsPage() {
 
       {/* AI Content Preview Modal */}
       {previewProduct && previewContent && (
-        <ContentPreviewModal
-          product={previewProduct}
-          content={previewContent}
-          generatedImageUrl={previewImageUrl}
-          onConfirm={handleConfirmQueue}
-          onCancel={() => {
-            setPreviewProduct(null);
-            setPreviewContent(null);
-            setPreviewImageUrl('');
-          }}
-          loading={generating}
-        />
+        <ErrorBoundary
+          fallback={
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+              <div className="bg-white rounded-2xl shadow-xl w-full max-w-md m-4 p-6">
+                <div className="text-center">
+                  <span className="text-4xl block mb-4">⚠️</span>
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">Preview Error</h3>
+                  <p className="text-gray-500 mb-4">Failed to load content preview</p>
+                  <button
+                    onClick={() => {
+                      setPreviewProduct(null);
+                      setPreviewContent(null);
+                      setPreviewImageUrl('');
+                    }}
+                    className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          }
+        >
+          <ContentPreviewModal
+            product={previewProduct}
+            content={previewContent}
+            generatedImageUrl={previewImageUrl}
+            onConfirm={handleConfirmQueue}
+            onCancel={() => {
+              setPreviewProduct(null);
+              setPreviewContent(null);
+              setPreviewImageUrl('');
+            }}
+            loading={generating}
+          />
+        </ErrorBoundary>
       )}
 
       {/* Loading overlay during AI generation */}

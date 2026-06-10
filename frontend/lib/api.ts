@@ -1,4 +1,19 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE = '';
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || '';
+
+const DEFAULT_TIMEOUT = 900000;
+const AI_TIMEOUT = 300000;
+
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeout = DEFAULT_TIMEOUT): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    return res;
+  } finally {
+    clearTimeout(id);
+  }
+}
 
 interface Stats {
   products: { total: number; sources: Record<string, number> };
@@ -19,6 +34,7 @@ interface Product {
   trend_score?: number;
   image_url?: string;
   product_url?: string;
+  affiliate_url?: string;
   source?: string;
 }
 
@@ -42,7 +58,7 @@ interface PinterestPost {
 }
 
 export async function getStats(): Promise<Stats> {
-  const res = await fetch(`${API_BASE}/api/stats`);
+  const res = await fetchWithTimeout(`${API_BASE}/api/stats`);
   if (!res.ok) throw new Error('Failed to fetch stats');
   return res.json();
 }
@@ -53,46 +69,73 @@ export async function getProducts(source?: string, minScore?: number, limit = 50
   if (minScore !== undefined) params.set('min_score', minScore.toString());
   params.set('limit', limit.toString());
   
-  const res = await fetch(`${API_BASE}/api/products?${params}`);
+  const res = await fetchWithTimeout(`${API_BASE}/api/products?${params}`);
   if (!res.ok) throw new Error('Failed to fetch products');
   return res.json();
 }
 
 export async function getTrendingProducts(limit = 20): Promise<Product[]> {
-  const res = await fetch(`${API_BASE}/api/trending?limit=${limit}`);
+  const res = await fetchWithTimeout(`${API_BASE}/api/trending?limit=${limit}`);
   if (!res.ok) throw new Error('Failed to fetch trending products');
   return res.json();
 }
 
 export async function getAffiliateLink(asin: string): Promise<{ asin: string; affiliate_link: string }> {
-  const res = await fetch(`${API_BASE}/api/affiliate/${asin}`);
+  const res = await fetchWithTimeout(`${API_BASE}/api/affiliate/${asin}`, {
+    headers: {
+      'Authorization': `Bearer ${API_KEY}`
+    }
+  });
   if (!res.ok) throw new Error('Failed to fetch affiliate link');
   return res.json();
 }
 
 export async function getPinterestQueue(status?: string): Promise<{ posts: PinterestPost[]; count: number }> {
   const params = status ? `?status=${status}` : '';
-  const res = await fetch(`${API_BASE}/api/pinterest/queue${params}`);
+  const res = await fetchWithTimeout(`${API_BASE}/api/pinterest/queue${params}`);
   if (!res.ok) throw new Error('Failed to fetch Pinterest queue');
   return res.json();
 }
 
 export async function getScrapingStatus(): Promise<{ logs: any[]; count: number }> {
-  const res = await fetch(`${API_BASE}/api/scraping/status`);
+  const res = await fetchWithTimeout(`${API_BASE}/api/scraping/status`);
   if (!res.ok) throw new Error('Failed to fetch scraping status');
   return res.json();
 }
 
-export async function triggerScrape(source?: string): Promise<any> {
-  const params = source ? `?source=${source}` : '';
-  const res = await fetch(`${API_BASE}/api/scheduler/scrape${params}`, { method: 'POST' });
+export async function triggerScrape(): Promise<any> {
+  const res = await fetchWithTimeout(`${API_BASE}/api/scheduler/scrape`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${API_KEY}`,
+      'Content-Type': 'application/json'
+    }
+  });
   if (!res.ok) throw new Error('Failed to trigger scrape');
   return res.json();
 }
 
 export async function triggerPublish(limit = 5): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/scheduler/publish?limit=${limit}`, { method: 'POST' });
+  const res = await fetchWithTimeout(`${API_BASE}/api/scheduler/publish?limit=${limit}`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${API_KEY}`,
+      'Content-Type': 'application/json'
+    }
+  });
   if (!res.ok) throw new Error('Failed to trigger publish');
+  return res.json();
+}
+
+export async function manualPublish(postId: string): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetchWithTimeout(`${API_BASE}/api/queue/publish/${postId}`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${API_KEY}`,
+      'Content-Type': 'application/json'
+    }
+  });
+  if (!res.ok) throw new Error('Failed to publish');
   return res.json();
 }
 
@@ -111,12 +154,18 @@ interface QueuePinterestPayload {
 }
 
 export async function queuePinterestPost(post: QueuePinterestPayload): Promise<{ status: string; post_id: string }> {
-  const res = await fetch(`${API_BASE}/api/pinterest/queue`, {
+  const res = await fetchWithTimeout(`${API_BASE}/api/pinterest/queue`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Authorization': `Bearer ${API_KEY}`,
+      'Content-Type': 'application/json'
+    },
     body: JSON.stringify(post),
   });
-  if (!res.ok) throw new Error('Failed to queue post');
+  if (!res.ok) {
+    const errorBody = await res.text();
+    throw new Error(`Failed to queue post: ${res.status} ${errorBody}`);
+  }
   return res.json();
 }
 
@@ -127,9 +176,12 @@ export interface AiContent {
 }
 
 export async function generatePinContent(product: Product): Promise<AiContent> {
-  const res = await fetch(`${API_BASE}/api/ai/generate-content`, {
+  const res = await fetchWithTimeout(`${API_BASE}/api/ai/generate-content`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Authorization': `Bearer ${API_KEY}`,
+      'Content-Type': 'application/json'
+    },
     body: JSON.stringify({
       asin: product.asin,
       title: product.title,
@@ -137,15 +189,18 @@ export async function generatePinContent(product: Product): Promise<AiContent> {
       image_url: product.image_url || '',
       source: product.source || null,
     }),
-  });
+  }, AI_TIMEOUT);
   if (!res.ok) throw new Error('Failed to generate content');
   return res.json();
 }
 
 export async function generatePinImage(product: Product, title: string, description?: string, hashtags?: string[]): Promise<{ image_url: string; filename: string | null }> {
-  const res = await fetch(`${API_BASE}/api/ai/generate-image`, {
+  const res = await fetchWithTimeout(`${API_BASE}/api/ai/generate-image`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Authorization': `Bearer ${API_KEY}`,
+      'Content-Type': 'application/json'
+    },
     body: JSON.stringify({
       asin: product.asin,
       title: title,
@@ -155,13 +210,19 @@ export async function generatePinImage(product: Product, title: string, descript
       description: description || null,
       hashtags: hashtags || null,
     }),
-  });
+  }, AI_TIMEOUT);
   if (!res.ok) throw new Error('Failed to generate image');
   return res.json();
 }
 
 export async function testPinterest(): Promise<{ success: boolean; message: string; boards: { id: string; name: string }[] }> {
-  const res = await fetch(`${API_BASE}/api/pinterest/test`, { method: 'POST' });
+  const res = await fetchWithTimeout(`${API_BASE}/api/pinterest/test`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${API_KEY}`,
+      'Content-Type': 'application/json'
+    }
+  });
   if (!res.ok) throw new Error('Failed to test Pinterest connection');
   return res.json();
 }
@@ -172,13 +233,13 @@ export interface Board {
 }
 
 export async function getPinterestBoards(): Promise<{ boards: Board[]; count: number }> {
-  const res = await fetch(`${API_BASE}/api/pinterest/boards`);
+  const res = await fetchWithTimeout(`${API_BASE}/api/pinterest/boards`);
   if (!res.ok) throw new Error('Failed to fetch Pinterest boards');
   return res.json();
 }
 
 export async function createPinterestBoard(name: string, description?: string): Promise<{ id: string; name: string }> {
-  const res = await fetch(`${API_BASE}/api/pinterest/boards/create`, {
+  const res = await fetchWithTimeout(`${API_BASE}/api/pinterest/boards/create`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, description: description || `Curated ${name.toLowerCase()}` }),
@@ -188,7 +249,7 @@ export async function createPinterestBoard(name: string, description?: string): 
 }
 
 export async function getPinterestStatus(): Promise<{ configured: boolean; board_id: string | null; message: string }> {
-  const res = await fetch(`${API_BASE}/api/pinterest/status`);
+  const res = await fetchWithTimeout(`${API_BASE}/api/pinterest/status`);
   if (!res.ok) throw new Error('Failed to get Pinterest status');
   return res.json();
 }
@@ -218,21 +279,89 @@ interface SystemStatus {
 }
 
 export async function getBufferStatus(): Promise<BufferStatus> {
-  const res = await fetch(`${API_BASE}/api/buffer/status`);
+  const res = await fetchWithTimeout(`${API_BASE}/api/buffer/status`);
   if (!res.ok) throw new Error('Failed to get Buffer status');
   return res.json();
 }
 
 export async function testBuffer(): Promise<{ success: boolean; message: string }> {
-  const res = await fetch(`${API_BASE}/api/buffer/test`, { method: 'POST' });
+  const res = await fetchWithTimeout(`${API_BASE}/api/buffer/test`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${API_KEY}`,
+      'Content-Type': 'application/json'
+    }
+  });
   if (!res.ok) throw new Error('Failed to test Buffer connection');
   return res.json();
 }
 
 export async function getSystemStatus(): Promise<SystemStatus> {
-  const res = await fetch(`${API_BASE}/api/system/status`);
+  const res = await fetchWithTimeout(`${API_BASE}/api/system/status`);
   if (!res.ok) throw new Error('Failed to fetch system status');
   return res.json();
 }
 
-export type { Stats, Product, PinterestPost, BufferStatus, SchedulerJob, SystemStatus };
+// Trend types
+export interface TrendData {
+  _id: string;
+  keyword: string;
+  rank: number;
+  source: 'pinterest' | 'amazon';
+  timeframe: string;
+  matchedAsins: string[];
+  discoveredAsins: string[];
+  productCount: number;
+  queuedCount: number;
+  processedAt: number;
+}
+
+interface TrendsResponse {
+  trends: TrendData[];
+  count: number;
+}
+
+export async function getTrends(source?: string, timeframe?: string): Promise<TrendsResponse> {
+  const params = new URLSearchParams();
+  if (source) params.set('source', source);
+  if (timeframe) params.set('timeframe', timeframe);
+  const res = await fetchWithTimeout(`${API_BASE}/api/trends?${params}`);
+  if (!res.ok) throw new Error('Failed to fetch trends');
+  return res.json();
+}
+
+interface TrendSyncResult {
+  status: string;
+  results: Record<string, any>;
+}
+
+export async function syncTrends(): Promise<TrendSyncResult> {
+  const res = await fetchWithTimeout(`${API_BASE}/api/trends/sync`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${API_KEY}`,
+      'Content-Type': 'application/json'
+    }
+  }, 240000);
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || 'Failed to sync trends');
+  }
+  return res.json();
+}
+
+interface TrendProductsResponse {
+  posts: PinterestPost[];
+  count: number;
+}
+
+export async function getTrendProducts(keyword?: string, timeframe?: string): Promise<TrendProductsResponse> {
+  const params = new URLSearchParams();
+  if (keyword) params.set('keyword', keyword);
+  if (timeframe) params.set('timeframe', timeframe);
+  const res = await fetchWithTimeout(`${API_BASE}/api/trends/products?${params}`);
+  if (!res.ok) throw new Error('Failed to fetch trend products');
+  return res.json();
+}
+
+export type { Stats, Product, PinterestPost, BufferStatus, SchedulerJob, SystemStatus, TrendsResponse, TrendSyncResult, TrendProductsResponse };

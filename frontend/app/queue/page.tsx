@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { getPinterestQueue, triggerPublish, getStats } from '@/lib/api';
+import { getPinterestQueue, triggerPublish, getStats, manualPublish } from '@/lib/api';
 import type { PinterestPost } from '@/lib/api';
 
 type TabType = 'queued' | 'published' | 'failed' | 'all';
@@ -12,6 +12,7 @@ export default function QueuePage() {
   const [activeTab, setActiveTab] = useState<TabType>('all');
   const [stats, setStats] = useState({ total: 0, queued: 0, published: 0, failed: 0 });
   const [running, setRunning] = useState(false);
+  const [publishingIds, setPublishingIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetchQueue();
@@ -58,6 +59,30 @@ export default function QueuePage() {
       console.error('Failed to run publisher:', err);
     } finally {
       setRunning(false);
+    }
+  }
+
+  async function handleManualPublish(postId: string) {
+    if (publishingIds.has(postId)) return;
+    
+    setPublishingIds(prev => new Set(prev).add(postId));
+    try {
+      const result = await manualPublish(postId);
+      if (result.ok) {
+        await fetchQueue();
+        await fetchStats();
+      } else {
+        alert(`Failed to publish: ${result.error}`);
+      }
+    } catch (err) {
+      console.error('Failed to publish:', err);
+      alert('Failed to publish. Please try again.');
+    } finally {
+      setPublishingIds(prev => {
+        const next = new Set(prev);
+        next.delete(postId);
+        return next;
+      });
     }
   }
 
@@ -130,6 +155,7 @@ export default function QueuePage() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Board</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Scheduled</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
@@ -167,6 +193,17 @@ export default function QueuePage() {
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-500">
                       {post.scheduledAt ? new Date(post.scheduledAt).toLocaleString() : '-'}
+                    </td>
+                    <td className="px-6 py-4">
+                      {post.status === 'queued' && (
+                        <button
+                          onClick={() => handleManualPublish(post._id)}
+                          disabled={publishingIds.has(post._id)}
+                          className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-white bg-pinterest-red rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {publishingIds.has(post._id) ? '⏳ Publishing...' : '📌 Publish'}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

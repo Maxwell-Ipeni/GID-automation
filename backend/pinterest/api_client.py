@@ -185,6 +185,64 @@ class PinterestApiClient:
             logger.error(f"Failed to create pin: {e}")
             raise PinterestApiError(f"Failed to create pin: {str(e)}")
     
+    async def get_trending_keywords(
+        self,
+        region: str = "US",
+        date_range: str = "today",
+    ) -> List[Dict[str, Any]]:
+        """
+        Get trending keywords from Pinterest Trends API.
+
+        Args:
+            region: Geographic region (e.g. "US", "GB", "CA")
+            date_range: "today" or "week"
+
+        Returns:
+            List of dicts with keys: keyword, rank, etc.
+        """
+        try:
+            params = {"region": region, "date_range": date_range}
+            response = await self.client.get(
+                f"{self.BASE_URL}/trends/keywords",
+                params=params,
+            )
+            data = self._handle_response(response)
+            return data.get("items", [])
+        except PinterestApiError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to get trending keywords: {e}")
+            raise PinterestApiError(f"Failed to get trending keywords: {str(e)}")
+
+    async def search_pins(
+        self,
+        query: str,
+        limit: int = 25,
+    ) -> List[Dict[str, Any]]:
+        """
+        Search pins by keyword. Returns pins sorted by relevance.
+
+        Args:
+            query: Search keyword
+            limit: Max pins to return (max 50)
+
+        Returns:
+            List of pin dicts with keys: id, title, link, media, etc.
+        """
+        try:
+            params = {"query": query, "limit": min(limit, 50)}
+            response = await self.client.get(
+                f"{self.BASE_URL}/pins/search",
+                params=params,
+            )
+            data = self._handle_response(response)
+            return data.get("items", [])
+        except PinterestApiError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to search pins: {e}")
+            raise PinterestApiError(f"Failed to search pins: {str(e)}")
+
     async def create_pin_simple(
         self,
         board_id: str,
@@ -286,9 +344,9 @@ class PinterestApiClient:
             self.access_token 
             and self.access_token != "your_pinterest_access_token"
             and self.access_token != ""
-            and self.board_id
-            and self.board_id != "your_pinterest_board_id"
-            and self.board_id != ""
+            and settings.PINTEREST_BOARD_ID
+            and settings.PINTEREST_BOARD_ID != "your_pinterest_board_id"
+            and settings.PINTEREST_BOARD_ID != ""
         )
     
     @property
