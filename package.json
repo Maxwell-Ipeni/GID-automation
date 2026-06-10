@@ -2,6 +2,7 @@
   "scripts": {
     "dev": "concurrently \"npm run dev:backend\" \"cd frontend && npm run dev\"",
     "dev:backend": "cd backend && ./venv/bin/python main.py",
+    "setup": "bash scripts/setup.sh",
     "build": "cd frontend && npm run build",
     "start": "cd frontend && npm run start",
     "lint": "cd frontend && npm run lint",
